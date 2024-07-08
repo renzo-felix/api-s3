@@ -1,0 +1,79 @@
+import boto3
+import hashlib
+import uuid
+from datetime import datetime, timedelta
+import json
+
+# Hashear contraseña
+def hash_password(password):
+    # Retorna la contraseña hasheada
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def lambda_handler(event, context):
+    try:
+        # Parsear el cuerpo de la solicitud
+        body = event
+        
+        # Entrada (json)
+        user_id = body['user_id']
+        password = body['password']
+        hashed_password = hash_password(password)
+        
+        # Proceso
+        dynamodb = boto3.resource('dynamodb')
+        user_table = dynamodb.Table('Usuario_proyecto')
+        
+        # Verificar si el usuario existe
+        response = user_table.get_item(
+            Key={
+                'user_id': user_id
+            }
+        )
+        
+        if 'Item' not in response:
+            return {
+                'statusCode': 403,
+                'body': json.dumps({'message': 'Usuario no existe'})
+            }
+        
+        user_data = response['Item']
+        hashed_password_bd = user_data['password']
+        
+        if hashed_password == hashed_password_bd:
+            # Genera token
+            token = str(uuid.uuid4())
+            fecha_hora_exp = datetime.now() + timedelta(minutes=60)
+            registro = {
+                'user_id': user_id,
+                'token': token,
+                'expires': fecha_hora_exp.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Guardar token en DynamoDB
+            token_table = dynamodb.Table('tokenAcceso_Proyecto')
+            dynamodbResponse = token_table.put_item(Item=registro)
+            
+            # Preparar datos de respuesta
+            user_data.pop('password')  # Eliminar la contraseña de los datos del usuario antes de responder
+            fabricas = user_data.get('fabrica_id', {})  # Obtener la lista de fábricas
+            
+            # Salida (json)
+            return {
+                'statusCode': 200,
+                'token': token,
+                'body': json.dumps({
+                    'user_data': user_data,
+                    'fabricas': fabricas
+                })
+            }
+        else:
+            return {
+                'statusCode': 403,
+                'body': json.dumps({'message': 'Password incorrecto'})
+            }
+    
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'message': 'An error occurred', 'error': str(e)})
+        }
